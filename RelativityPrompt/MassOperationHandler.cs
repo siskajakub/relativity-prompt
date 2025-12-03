@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Linq;
+using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
@@ -46,15 +47,15 @@ namespace RelativityPrompt
             _logger.LogDebug("Prompt, current Workspace ID: {workspaceId}", workspaceId.ToString());
 
             // Check if all Instance Settings are in place
-            IDictionary<string, string> instanceSettings = this.GetInstanceSettings(ref response, new string[] { "SourceField", "DestinationField", "LogField", "OpenAIKey", "OpenAIEndpoint", "Model", "Prompt", "PromptMaxSize" });
+            IDictionary<string, string> instanceSettings = this.GetInstanceSettings(ref response, new string[] { "SourceField", "DestinationField", "LogField", "Key", "Endpoint", "Model", "PromptMaxSize" });
             // Check if there was not error
             if (!response.Success)
             {
                 return response;
             }
 
-            // Preview the prompt
-            response.Message = string.Format("PROMPT\n\n{0}\n\n++DOCUMENT[{1}]++", instanceSettings["Prompt"], instanceSettings["SourceField"]);
+            // Show the warning
+            response.Message = string.Format("Please note there are associated costs with prompting every {0} in the Document", instanceSettings["SourceField"]);
 
             return response;
         }
@@ -72,6 +73,46 @@ namespace RelativityPrompt
                 Success = true,
                 Message = ""
             };
+
+            // Get model choices
+            kCura.EventHandler.ChoiceCollection modelChoiceCollection = (kCura.EventHandler.ChoiceCollection)this.LayoutMask.Fields["Prompt Models"].Value.Value;
+            if (modelChoiceCollection == null || modelChoiceCollection.Count <= 0)
+            {
+                response.Success = false;
+                response.Message = "Please select a valid model.";
+                return response;
+            }
+
+            // Find the selected model choice
+            kCura.EventHandler.Choice modelChoice = null;
+            IEnumerator enumerator = modelChoiceCollection.GetEnumerator();
+            while (enumerator.MoveNext())
+            {
+                kCura.EventHandler.Choice choice = (kCura.EventHandler.Choice)enumerator.Current;
+                if (choice.IsSelected)
+                {
+                    modelChoice = choice;
+                    break;
+                }
+            }
+            if (modelChoice == null)
+            {
+                response.Success = false;
+                response.Message = "Please select a valid model.";
+                return response;
+            }
+            // Get model
+            string model = modelChoice.Name;
+
+            // Get prompt
+            string prompt = this.LayoutMask.Fields["Prompt Text"].Value.Value.ToString();
+            if (string.IsNullOrWhiteSpace(prompt) || prompt.Length < 8)
+            {
+                response.Success = false;
+                response.Message = "Please enter a valid prompt.";
+                return response;
+            }
+
             return response;
         }
 
@@ -109,12 +150,15 @@ namespace RelativityPrompt
             _logger.LogDebug("Prompt, current Workspace ID: {workspaceId}", workspaceId.ToString());
 
             // Check if all Instance Settings are in place
-            IDictionary<string, string> instanceSettings = this.GetInstanceSettings(ref response, new string[] { "SourceField", "DestinationField", "LogField", "OpenAIKey", "OpenAIEndpoint", "Model", "Prompt", "PromptMaxSize" });
+            IDictionary<string, string> instanceSettings = this.GetInstanceSettings(ref response, new string[] { "SourceField", "DestinationField", "LogField", "Key", "Endpoint", "Model", "PromptMaxSize" });
             // Check if there was not error
             if (!response.Success)
             {
                 return response;
             }
+
+            // Get prompt
+            string prompt = this.LayoutMask.Fields["Prompt Text"].Value.Value.ToString();
 
             // Update general status
             this.ChangeStatus("Prompting documents");
@@ -126,7 +170,7 @@ namespace RelativityPrompt
             for (int i = 0; i < this.BatchIDs.Count; i++)
             {
                 // Prompt documents and update Relativity using Object Manager API
-                promptTasks.Add(PromptDocument(workspaceId, this.BatchIDs[i], instanceSettings["SourceField"], instanceSettings["DestinationField"], instanceSettings["LogField"], instanceSettings["OpenAIKey"], instanceSettings["OpenAIEndpoint"], instanceSettings["Model"], instanceSettings["Prompt"], int.Parse(instanceSettings["PromptMaxSize"])));
+                promptTasks.Add(PromptDocument(workspaceId, this.BatchIDs[i], instanceSettings["SourceField"], instanceSettings["DestinationField"], instanceSettings["LogField"], instanceSettings["Key"], instanceSettings["Endpoint"], instanceSettings["Model"], prompt, int.Parse(instanceSettings["PromptMaxSize"])));
 
                 // Update progreass bar
                 this.IncrementCount(1);
@@ -253,9 +297,9 @@ namespace RelativityPrompt
         }
 
         /*
-         * Custom method to translate document using Azure Translator
+         * Custom method to prompt document using LLM
          */
-        private async Task<int> PromptDocument(int workspaceId, int documentArtifactId, string sourceField, string destinationField, string logField, string openAIKey, string openAIEndpoint, string model, string prompt, int promptMaxSize)
+        private async Task<int> PromptDocument(int workspaceId, int documentArtifactId, string sourceField, string destinationField, string logField, string key, string endpoint, string model, string prompt, int promptMaxSize)
         {
             /*
              * Custom local function to shorten string based on threshold
@@ -328,15 +372,20 @@ namespace RelativityPrompt
             var requestBody = new
             {
                 model = model,
-                prompt = promptDocument
+                max_tokens = 1024,
+                messages = new[]
+                {
+                    new { role = "user", content = promptDocument }
+                }
             };
 
             // Do prompt call
             HttpRequestMessage request = new HttpRequestMessage();
             request.Method = HttpMethod.Post;
-            request.RequestUri = new Uri(openAIEndpoint + "/v1/completions");
+            request.RequestUri = new Uri(endpoint);
             request.Content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
-            request.Headers.Add("Authorization", $"Bearer {openAIKey}");
+            request.Headers.Add("x-api-key", key);
+            request.Headers.Add("anthropic-version", "2023-06-01");
 
             // Send the request
             HttpClient client = new HttpClient();
@@ -355,22 +404,22 @@ namespace RelativityPrompt
             client.Dispose();
 
             // Parse JSON
-            OpenAIResponse promptResults = JsonSerializer.Deserialize<OpenAIResponse>(promptResponse);
+            ClaudeResponse promptResults = JsonSerializer.Deserialize<ClaudeResponse>(promptResponse);
 
             // Check the result
-            if (promptResults.Choices.Length == 0 || promptResults.Choices[0].Text.Length == 0)
+            if (promptResults.Content.Length == 0 || promptResults.Content[0].Text.Length == 0)
             {
                 _logger.LogError("Prompt, empty prompt result (ArtifactID: {id})", documentArtifactId.ToString());
                 return documentArtifactId;
             }
 
             // Log the prompt result
-            _logger.LogDebug("Prompt, prompting result (ArtifactID: {id}, length: {length})", documentArtifactId.ToString(), promptResults.Choices[0].Text.Length.ToString());
+            _logger.LogDebug("Prompt, prompting result (ArtifactID: {id}, length: {length})", documentArtifactId.ToString(), promptResults.Content[0].Text.Length.ToString());
 
             // Construct prompting result stream
             Stream streamPromptResults = new MemoryStream();
             StreamWriter streamWriter = new StreamWriter(streamPromptResults);
-            streamWriter.Write(promptResults.Choices[0].Text);
+            streamWriter.Write(promptResults.Content[0].Text);
             streamWriter.Flush();
             streamPromptResults.Position = 0;
 
@@ -420,7 +469,7 @@ namespace RelativityPrompt
                 Stream streamUpdatedLog = new MemoryStream();
                 StreamWriter streamLogWriter = new StreamWriter(streamUpdatedLog);
                 streamLogWriter.Write(new StreamReader(streamCurrentLog).ReadToEnd());
-                streamLogWriter.Write("Prompt;" + this.Helper.GetAuthenticationManager().UserInfo.EmailAddress + ";" + DateTime.Now.ToString("MM/dd/yyyy HH:mm:ss") + ";" + model + ";" + promptDocument.Length.ToString() + ";" + promptResults.Choices[0].Text.Length.ToString() + "\n");
+                streamLogWriter.Write("Prompt;" + this.Helper.GetAuthenticationManager().UserInfo.EmailAddress + ";" + DateTime.Now.ToString("MM/dd/yyyy HH:mm:ss") + ";" + model + ";" + promptDocument.Length.ToString() + ";" + promptResults.Content[0].Text.Length.ToString() + "\n");
                 streamLogWriter.Flush();
                 streamUpdatedLog.Position = 0;
 

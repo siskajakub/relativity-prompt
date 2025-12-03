@@ -8,9 +8,9 @@ Name | Section | Value Type | Value (example) | Description
 ---- | ------- | ---------- | --------------- | -----------
 DestinationField | Prompt | Text | Extracted Text Prompted | Document Field where to record the result of prompting.
 LogField | Prompt | Text | Prompting Log | Document Field to store the prompting log.
-Model | Prompt | Text | gpt-4 | Name of the model to use.
-OpenAIKey | Prompt | Text | xxxxxxxxx | OpenAI API key.
-OpenAIEndpoint | Prompt | Text | https://api.openai.com | OpenAI API endpoint.
+Model | Prompt | Text | claude-sonnet-4-5-20250929 | Name of the model to use.
+Key | Prompt | Text | xxxxxxxxx | OpenAI API key.
+Endpoint | Prompt | Text | https://api.anthropic.com/v1/messages | OpenAI API endpoint.
 Prompt | Prompt | Text | Please summarize following text: | Text of the prompt. Text of each document is appended after the prompt text.
 PromptMaxSize | Prompt | Text | 10000 | Threshold for overall prompt size, longer text will be truncated. Number must be integer.
 SourceField | Prompt | Text | Extracted Text | Document Field with the text to use for prompting.
@@ -36,9 +36,10 @@ You may need to install also additional libraries that are required. These libra
 For desired workspaces add mass event handler to Document Object:
 * Browse to Document Object (Workspace->Workspace Admin->Object Type->Document)
 * In Mass Operations section click New and add the handler:
-  * Name: AI Prompt
+  * Name: Prompt
   * Pop-up Directs To: Mass Operation Handler
   * Select Mass Operation Handler: RelativityPrompt.dll
+  * Select Layout: Select a custom layout with a field "Prompt Text" (input field for prompt)
 
 # Log
 Mass operation generates prompting log to fiels specified by the Relativity Instance Settings.  
@@ -53,5 +54,5 @@ Log entry has following fields:
 Prompting log can be viewed from the Relativity front-end via attached Relativity Script.
 
 # Notes
-Relativity AI Prompt mass operation was developed and tested in Relativity Server 2023.  
+Relativity AI Prompt mass operation was developed and tested in Relativity Server 2024.  
 Relativity AI Prompt mass operation works correctly only with UTF-8 text.
